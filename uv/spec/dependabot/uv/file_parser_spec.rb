@@ -913,6 +913,68 @@ RSpec.describe Dependabot::Uv::FileParser do
           end
         end
       end
+
+      describe "transitive dependencies" do
+        subject(:dependencies) { parser.parse.reject(&:top_level?) }
+
+        it "includes transitive dependencies with metadata" do
+          # Should have 5 transitive dependencies (7 total - 2 top level)
+          expect(dependencies.length).to eq(5)
+        end
+
+        describe "a transitive dependency" do
+          # Find certifi, which is a transitive dependency of requests
+          subject(:dependency) { dependencies.find { |d| d.name == "certifi" } }
+
+          it "has subdependency metadata" do
+            expect(dependency).not_to be_nil
+            expect(dependency.version).to eq("2025.1.31")
+            expect(dependency.requirements).to eq([])
+            expect(dependency.subdependency_metadata).to eq([{
+              production: true,
+              top_level: false
+            }])
+          end
+        end
+      end
+
+      describe "subdependency metadata verification" do
+        it "marks all dependencies from uv.lock with subdependency metadata" do
+          all_deps = parser.parse
+          uv_lock_deps = all_deps.select { |d| d.subdependency_metadata && !d.subdependency_metadata.empty? }
+          
+          # All dependencies should have subdependency metadata
+          expect(uv_lock_deps.length).to eq(all_deps.length), 
+            "Expected all #{all_deps.length} dependencies to have subdependency metadata, but only #{uv_lock_deps.length} do"
+          
+          # Check that production flag is set correctly  
+          uv_lock_deps.each do |dep|
+            metadata = dep.subdependency_metadata.first
+            expect(metadata[:production]).to be(true), "Dependency #{dep.name} should be marked as production"
+            expect(metadata.key?(:top_level)).to be(true), "Dependency #{dep.name} should have top_level metadata"
+          end
+        end
+        
+        it "correctly identifies top-level vs transitive dependencies" do
+          all_deps = parser.parse
+          top_level_deps = all_deps.select(&:top_level?)
+          transitive_deps = all_deps.reject(&:top_level?)
+          
+          # Verify top-level dependencies have top_level: true in metadata
+          top_level_deps.each do |dep|
+            metadata = dep.subdependency_metadata&.first
+            expect(metadata).not_to be_nil, "Top-level dependency #{dep.name} missing metadata"
+            expect(metadata[:top_level]).to be(true), "Top-level dependency #{dep.name} should have top_level: true"
+          end
+          
+          # Verify transitive dependencies have top_level: false in metadata  
+          transitive_deps.each do |dep|
+            metadata = dep.subdependency_metadata&.first
+            expect(metadata).not_to be_nil, "Transitive dependency #{dep.name} missing metadata"
+            expect(metadata[:top_level]).to be(false), "Transitive dependency #{dep.name} should have top_level: false"
+          end
+        end
+      end
     end
   end
 end

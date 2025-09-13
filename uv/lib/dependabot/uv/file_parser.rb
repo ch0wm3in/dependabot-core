@@ -16,6 +16,7 @@ require "dependabot/uv/requirements_file_matcher"
 require "dependabot/uv/language_version_manager"
 require "dependabot/uv/package_manager"
 require "toml-rb"
+require "set"
 
 module Dependabot
   module Uv
@@ -53,7 +54,8 @@ module Dependabot
         dependency_set += uv_lock_file_dependencies
         dependency_set += requirement_dependencies if requirement_files.any?
 
-        dependency_set.dependencies
+        # Ensure all dependencies have subdependency_metadata for proper vulnerability scanning
+        add_subdependency_metadata(dependency_set.dependencies)
       end
 
       sig { override.returns(Ecosystem) }
@@ -176,8 +178,10 @@ module Dependabot
           packages.each do |package_data|
             next unless package_data.is_a?(Hash) && package_data["name"] && package_data["version"]
 
+            package_name = normalised_name(package_data["name"])
+
             dependency_set << Dependency.new(
-              name: normalised_name(package_data["name"]),
+              name: package_name,
               version: package_data["version"],
               requirements: [], # Lock files don't contain requirements
               package_manager: "uv"
@@ -393,6 +397,52 @@ module Dependabot
       def requirements_in_file_matcher
         @requirements_in_file_matcher ||= T.let(RequiremenstFileMatcher.new(requirements_in_files),
                                                 T.nilable(RequiremenstFileMatcher))
+      end
+
+      sig { returns(T::Set[String]) }
+      def top_level_dependency_names
+        deps = T.let(Set.new, T::Set[String])
+
+        # Get dependencies from pyproject.toml dependencies
+        if pyproject
+          pyproject_deps = pyproject_file_dependencies
+          pyproject_deps.dependencies.each do |dep|
+            deps << dep.name if dep.top_level?
+          end
+        end
+
+        # Get dependencies from requirements files
+        requirement_dependencies.dependencies.each do |dep|
+          deps << dep.name if dep.top_level?
+        end
+
+        deps
+      end
+
+      sig { params(dependencies: T::Array[Dependency]).returns(T::Array[Dependency]) }
+      def add_subdependency_metadata(dependencies)
+        # Get top-level dependency names from dependencies that already have requirements
+        # (those came from pyproject.toml or requirements files, not from lockfiles)
+        top_level_deps = T.let(Set.new, T::Set[String])
+        dependencies.each do |dep|
+          top_level_deps << dep.name unless dep.requirements.empty?
+        end
+
+        dependencies.map do |dependency|
+          is_top_level = top_level_deps.include?(dependency.name)
+
+          # Always create new dependency with subdependency metadata to ensure consistency
+          Dependency.new(
+            name: dependency.name,
+            version: dependency.version,
+            requirements: dependency.requirements,
+            package_manager: dependency.package_manager,
+            subdependency_metadata: [{
+              production: true, # All dependencies are production dependencies for uv
+              top_level: is_top_level
+            }]
+          )
+        end
       end
     end
   end
