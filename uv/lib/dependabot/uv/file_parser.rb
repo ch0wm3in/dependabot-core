@@ -16,6 +16,7 @@ require "dependabot/uv/requirements_file_matcher"
 require "dependabot/uv/language_version_manager"
 require "dependabot/uv/package_manager"
 require "toml-rb"
+require "set"
 
 module Dependabot
   module Uv
@@ -173,14 +174,24 @@ module Dependabot
           lockfile_content = TomlRB.parse(file.content)
           packages = lockfile_content.fetch("package", [])
 
+          # Get top-level dependencies from pyproject.toml if available
+          top_level_deps = top_level_dependency_names
+
           packages.each do |package_data|
             next unless package_data.is_a?(Hash) && package_data["name"] && package_data["version"]
 
+            package_name = normalised_name(package_data["name"])
+            is_top_level = top_level_deps.include?(package_name)
+
             dependency_set << Dependency.new(
-              name: normalised_name(package_data["name"]),
+              name: package_name,
               version: package_data["version"],
               requirements: [], # Lock files don't contain requirements
-              package_manager: "uv"
+              package_manager: "uv",
+              subdependency_metadata: [{
+                production: true, # All dependencies from uv.lock are production dependencies
+                top_level: is_top_level
+              }]
             )
           end
         rescue StandardError => e
@@ -393,6 +404,26 @@ module Dependabot
       def requirements_in_file_matcher
         @requirements_in_file_matcher ||= T.let(RequiremenstFileMatcher.new(requirements_in_files),
                                                 T.nilable(RequiremenstFileMatcher))
+      end
+
+      sig { returns(T::Set[String]) }
+      def top_level_dependency_names
+        deps = T.let(Set.new, T::Set[String])
+        
+        # Get dependencies from pyproject.toml dependencies
+        if pyproject
+          pyproject_deps = pyproject_file_dependencies
+          pyproject_deps.dependencies.each do |dep|
+            deps << dep.name if dep.top_level?
+          end
+        end
+
+        # Get dependencies from requirements files
+        requirement_dependencies.dependencies.each do |dep|
+          deps << dep.name if dep.top_level?
+        end
+
+        deps
       end
     end
   end

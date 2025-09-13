@@ -913,6 +913,30 @@ RSpec.describe Dependabot::Uv::FileParser do
           end
         end
       end
+
+      describe "transitive dependencies" do
+        subject(:dependencies) { parser.parse.reject(&:top_level?) }
+
+        it "includes transitive dependencies with metadata" do
+          # Should have 5 transitive dependencies (7 total - 2 top level)
+          expect(dependencies.length).to eq(5)
+        end
+
+        describe "a transitive dependency" do
+          # Find certifi, which is a transitive dependency of requests
+          subject(:dependency) { dependencies.find { |d| d.name == "certifi" } }
+
+          it "has subdependency metadata" do
+            expect(dependency).not_to be_nil
+            expect(dependency.version).to eq("2025.1.31")
+            expect(dependency.requirements).to eq([])
+            expect(dependency.subdependency_metadata).to eq([{
+              production: true,
+              top_level: false
+            }])
+          end
+        end
+      end
     end
   end
 end
