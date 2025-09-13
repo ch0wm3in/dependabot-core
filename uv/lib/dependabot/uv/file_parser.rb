@@ -402,7 +402,7 @@ module Dependabot
       sig { returns(T::Set[String]) }
       def top_level_dependency_names
         deps = T.let(Set.new, T::Set[String])
-        
+
         # Get dependencies from pyproject.toml dependencies
         if pyproject
           pyproject_deps = pyproject_file_dependencies
@@ -425,16 +425,13 @@ module Dependabot
         # (those came from pyproject.toml or requirements files, not from lockfiles)
         top_level_deps = T.let(Set.new, T::Set[String])
         dependencies.each do |dep|
-          top_level_deps << dep.name if dep.requirements && !dep.requirements.empty?
+          top_level_deps << dep.name unless dep.requirements.empty?
         end
 
         dependencies.map do |dependency|
-          # Skip if the dependency already has subdependency metadata
-          next dependency if dependency.subdependency_metadata && !dependency.subdependency_metadata.empty?
-
           is_top_level = top_level_deps.include?(dependency.name)
 
-          # Create new dependency with subdependency metadata
+          # Always create new dependency with subdependency metadata to ensure consistency
           Dependency.new(
             name: dependency.name,
             version: dependency.version,
