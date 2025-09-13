@@ -54,7 +54,8 @@ module Dependabot
         dependency_set += uv_lock_file_dependencies
         dependency_set += requirement_dependencies if requirement_files.any?
 
-        dependency_set.dependencies
+        # Ensure all dependencies have subdependency_metadata for proper vulnerability scanning
+        add_subdependency_metadata(dependency_set.dependencies)
       end
 
       sig { override.returns(Ecosystem) }
@@ -174,24 +175,16 @@ module Dependabot
           lockfile_content = TomlRB.parse(file.content)
           packages = lockfile_content.fetch("package", [])
 
-          # Get top-level dependencies from pyproject.toml if available
-          top_level_deps = top_level_dependency_names
-
           packages.each do |package_data|
             next unless package_data.is_a?(Hash) && package_data["name"] && package_data["version"]
 
             package_name = normalised_name(package_data["name"])
-            is_top_level = top_level_deps.include?(package_name)
 
             dependency_set << Dependency.new(
               name: package_name,
               version: package_data["version"],
               requirements: [], # Lock files don't contain requirements
-              package_manager: "uv",
-              subdependency_metadata: [{
-                production: true, # All dependencies from uv.lock are production dependencies
-                top_level: is_top_level
-              }]
+              package_manager: "uv"
             )
           end
         rescue StandardError => e
@@ -424,6 +417,35 @@ module Dependabot
         end
 
         deps
+      end
+
+      sig { params(dependencies: T::Array[Dependency]).returns(T::Array[Dependency]) }
+      def add_subdependency_metadata(dependencies)
+        # Get top-level dependency names from dependencies that already have requirements
+        # (those came from pyproject.toml or requirements files, not from lockfiles)
+        top_level_deps = T.let(Set.new, T::Set[String])
+        dependencies.each do |dep|
+          top_level_deps << dep.name if dep.requirements && !dep.requirements.empty?
+        end
+
+        dependencies.map do |dependency|
+          # Skip if the dependency already has subdependency metadata
+          next dependency if dependency.subdependency_metadata && !dependency.subdependency_metadata.empty?
+
+          is_top_level = top_level_deps.include?(dependency.name)
+
+          # Create new dependency with subdependency metadata
+          Dependency.new(
+            name: dependency.name,
+            version: dependency.version,
+            requirements: dependency.requirements,
+            package_manager: dependency.package_manager,
+            subdependency_metadata: [{
+              production: true, # All dependencies are production dependencies for uv
+              top_level: is_top_level
+            }]
+          )
+        end
       end
     end
   end
